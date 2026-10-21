@@ -1,0 +1,141 @@
+"""Pruebas del motor de cálculo y de los documentos.
+
+Ejecutar:  python -m pytest tests -q     (o:  python tests/test_calculos.py)
+Los valores esperados se verificaron a mano.
+"""
+import sys
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
+
+RAIZ = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(RAIZ))
+
+import calculos as c  # noqa: E402
+import documentos as d  # noqa: E402
+import planilla as pl  # noqa: E402
+
+EXCEL = RAIZ / "datos" / "PlanillasCPA404_BD.xlsx"
+D = Decimal
+
+
+def _datos():
+    filas_p, tabla, empleados = pl.cargar_datos_excel(str(EXCEL))
+    return c.cargar_parametros(filas_p), tabla, empleados
+
+
+def test_tramos_antiguedad():
+    _, tabla, _ = _datos()
+    esperado = {0: 0, 1: 0, 2: 5, 4: 5, 5: 11, 7: 11, 8: 18, 10: 18, 11: 26,
+                14: 26, 15: 34, 19: 34, 20: 42, 24: 42, 25: 50, 40: 50}
+    for anios, pct in esperado.items():
+        assert c.porcentaje_antiguedad(anios, tabla) == D(pct) / 100, anios
+
+
+def test_anios_cumplidos_y_bono():
+    _, tabla, _ = _datos()
+    assert c.anios_cumplidos(date(2015, 4, 1), date(2026, 3, 31)) == 10
+    assert c.anios_cumplidos(date(2015, 4, 1), date(2026, 4, 1)) == 11
+    r = c.calcular_bono_antiguedad(date(2015, 4, 1), date(2026, 10, 31), 3300, tabla)
+    assert r["anios"] == 11 and r["bono"] == D("2574.00")  # 26% de 9.900
+
+
+def test_ans_por_rangos():
+    par, _, _ = _datos()
+    assert c.calcular_ans(30000, par) == D("482.50")   # 17.000x1,15% + 5.000x5,74%
+    assert c.calcular_ans(13000, par) == D("0.00")
+    # 27.000x1,15% + 15.000x5,74% + 5.000x11,48% = 310,50 + 861 + 574
+    assert c.calcular_ans(40000, par) == D("1745.50")
+
+
+def test_componentes_variables_emp001():
+    par, _, _ = _datos()
+    r = c.calcular_componentes_variables(22450, 10, 8, 1, 1, par["R_HE"], par["R_HN"],
+                                         par["R_DD"], par["R_DF"], bono_antiguedad=2574)
+    assert r["pago_horas_extra"] == D("1870.83")
+    assert r["pago_nocturno"] == D("187.08")
+    assert r["pago_domingos"] == D("2245.00")
+    assert r["pago_feriados"] == D("1496.67")
+    assert r["total_ganado"] == D("30823.58")
+
+
+def test_rciva_sin_impuesto_y_saldo_a_favor():
+    par, _, _ = _datos()
+    r = c.calcular_aportes_y_rciva(4500, 3300, 0, par)
+    assert r["aportes_laborales"] == D("571.95")          # 12,71%
+    assert r["impuesto_determinado"] == D("0.00")
+    assert r["rciva_retener"] == D("0.00")
+    assert r["saldo_favor_nuevo"] == D("429.00")           # 13% de 1 SMN
+    assert r["liquido_pagable"] == D("3928.05")
+
+
+def test_rciva_con_impuesto():
+    par, _, _ = _datos()
+    r = c.calcular_aportes_y_rciva(15000, 3300, 1000, par)
+    ans = D("23.00")                                       # 2.000 x 1,15%
+    assert r["aporte_nacional_solidario"] == ans
+    base = D("15000") - D("1906.50") - ans                 # AFP 12,71% = 1.906,50
+    assert r["base_imponible"] == base
+    imp = c.redondear((base - D("6600")) * D("0.13"))      # 841,165 -> 841,17
+    assert r["impuesto_determinado"] == imp
+    neto = imp - D("429.00") - D("130.00")
+    assert r["rciva_retener"] == neto
+    assert r["liquido_pagable"] == D("15000") - D("1906.50") - ans - neto
+
+
+def test_saldo_anterior_con_ufv():
+    par, _, _ = _datos()
+    r = c.calcular_aportes_y_rciva(4500, 3300, 0, par, saldo_favor_anterior=1000,
+                                   ufv_anterior=2, ufv_actual=2.2)
+    assert r["saldo_favor_anterior_actualizado"] == D("1100.00")
+    # si la UFV baja, no se reduce el saldo
+    r = c.calcular_aportes_y_rciva(4500, 3300, 0, par, saldo_favor_anterior=1000,
+                                   ufv_anterior=2, ufv_actual=1.9)
+    assert r["saldo_favor_anterior_actualizado"] == D("1000.00")
+
+
+def test_patronal_y_previsiones():
+    par, _, _ = _datos()
+    p = c.calcular_aportes_patronales(10000, par)
+    assert p["aportes_patronales"] == D("1721.00")         # 17,21%
+    pr = c.calcular_previsiones(10000, par)
+    assert pr["aguinaldo"] == pr["indemnizacion"] == D("833.00")
+
+
+def test_planilla_completa_y_errores():
+    par, tabla, emp = _datos()
+    emp[0]["Horas_Extra"] = 10
+    emp.append({"ID_Empleado": "EMP-X", "Haber_Basico": 0, "Fecha_Ingreso": date(2020, 1, 1)})
+    filas, errores = pl.calcular_todos(emp, par, tabla, 2026, 10)
+    assert len(filas) == 5 and len(errores) == 1 and "EMP-X" in errores[0]
+    for f in filas:  # identidad contable
+        assert f["liquido_pagable"] == f["total_ganado"] - f["aportes_laborales"] - f["rciva_retener"]
+    # 22.450 + bono 2.574 + 10 h extra (1.870,83)
+    assert filas[0]["total_ganado"] == D("26894.83")
+
+
+def test_documentos_se_generan():
+    from io import BytesIO
+    from openpyxl import load_workbook
+    par, tabla, emp = _datos()
+    filas, _ = pl.calcular_todos(emp, par, tabla, 2026, 10, 3.2, 3.25)
+    meta = dict(empresa="Empresa Ejemplo S.R.L.", nit="123", periodo="Octubre 2026",
+                fecha_corte=date(2026, 10, 31), parametros=par, ufv_anterior=3.2, ufv_actual=3.25)
+    for gen in (d.excel_planilla_laboral, d.excel_planilla_impositiva):
+        wb = load_workbook(BytesIO(gen(filas, meta)))
+        assert wb.worksheets[0]["A1"].value == "Empresa Ejemplo S.R.L."
+    for gen in (d.pdf_planilla_laboral, d.pdf_planilla_impositiva):
+        assert gen(filas, meta)[:5] == b"%PDF-"
+
+
+if __name__ == "__main__":
+    fallos = 0
+    for nombre, fn in sorted(globals().items()):
+        if nombre.startswith("test_") and callable(fn):
+            try:
+                fn()
+                print("OK  ", nombre)
+            except AssertionError as exc:
+                fallos += 1
+                print("FALLA", nombre, exc)
+    sys.exit(1 if fallos else 0)

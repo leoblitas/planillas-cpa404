@@ -73,4 +73,4 @@ Haber = sueldos por pagar (líquido), Gestora (aportes laborales + patronales si
 **Pública:** misma partida doble con rubros y cuentas: 11700 Sueldos, 11220 Bono de antigüedad, 11910 Horas extraordinarias
 (horas extra + nocturno + domingos + feriados), 11400 Aguinaldo, 13110, 13120, 13131, 13200 y 94100 hacia 1155 (Producción) o 611, 6133, 6121, 6123, 6122 y 6131 (Administración);
 haber en 2113, 21141, 21142, 21161, 2141 y 2251. Los códigos están en `asientos.py` (`PARTIDAS_PUBLICAS`, `CUENTAS_PUBLICAS_PAGAR`).
-Las líneas con monto cero no se imprimen.
+Todos los montos van en las columnas Debe o Haber (la columna Parcial queda en blanco). Las líneas con monto cero no se imprimen.

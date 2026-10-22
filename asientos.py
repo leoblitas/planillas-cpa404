@@ -134,17 +134,15 @@ def asiento_privado(filas: Sequence[dict]) -> dict[str, Any]:
 # Empresa pública (comprobante patrimonial)
 # --------------------------------------------------------------------------- #
 # (rubro, partida presupuestaria, clave del monto, cuenta Producción, cuenta Administración)
-# El orden agrupa las partidas que van a una misma cuenta, para poder mostrar
-# los montos parciales y el total de la cuenta.
 PARTIDAS_PUBLICAS = [
     ("11700", "Sueldos", "sueldos", ("1155", "Inventario de Producción en Proceso"),
      ("611", "Sueldos y Salarios")),
     ("11220", "Bono de Antigüedad", "bono_antiguedad", ("1155", "Inventario de Producción en Proceso"),
      ("611", "Sueldos y Salarios")),
-    ("11910", "Horas extraordinarias", "extraordinarias",
-     ("1155", "Inventario de Producción en Proceso"), ("611", "Sueldos y Salarios")),
     ("11400", "Aguinaldo", "aguinaldo", ("1155", "Inventario de Producción en Proceso"),
      ("6133", "Otros Beneficios sociales")),
+    ("11910", "Horas extraordinarias", "extraordinarias",
+     ("1155", "Inventario de Producción en Proceso"), ("611", "Sueldos y Salarios")),
     ("13110", "Régimen de Corto Plazo Salud", "patronal_cns",
      ("1155", "Inventario de Producción en Proceso"), ("6121", "Aportes patronales al seguro social")),
     ("13120", "Prima de riesgo profesional Régimen de LP", "patronal_riesgo_profesional",
@@ -156,9 +154,6 @@ PARTIDAS_PUBLICAS = [
     ("94100", "Indemnización", "indemnizacion", ("1155", "Inventario de Producción en Proceso"),
      ("6131", "Indemnizaciones")),
 ]
-# Se ordena para que las cuentas queden juntas dentro de cada departamento.
-_ORDEN_ADMIN = ["11700", "11220", "11910", "11400", "13110", "13120", "13131", "13200", "94100"]
-
 CUENTAS_PUBLICAS_PAGAR = {
     "sueldos": ("2113", "Sueldos y Salarios a pagar a corto plazo"),
     "patronales": ("21141", "Aportes patronales a pagar a corto plazo"),
@@ -173,9 +168,8 @@ def asiento_publico(filas: Sequence[dict]) -> dict[str, Any]:
     """Líneas del comprobante patrimonial (sector público).
 
     Cada línea: ``rubro``, ``partida``, ``codigo``, ``cuenta``, ``parcial``,
-    ``debe``, ``haber``. Cuando varias partidas consecutivas van a la misma
-    cuenta, cada una muestra su monto en ``parcial`` y el total de la cuenta
-    aparece en ``debe`` de la última.
+    ``debe``, ``haber``. Todos los montos van en ``debe`` o ``haber``;
+    ``parcial`` queda vacío.
     """
     lineas: list[dict] = []
     for depto, s in _por_departamento(filas).items():
@@ -190,34 +184,13 @@ def asiento_publico(filas: Sequence[dict]) -> dict[str, Any]:
             "patronal_provivienda": s["patronal_provivienda"],
             "indemnizacion": s["indemnizacion"],
         }
-        crudas = []
         for rubro, partida, clave, c_prod, c_adm in PARTIDAS_PUBLICAS:
             monto = montos[clave]
             if monto <= 0:
                 continue
             codigo, cuenta = c_prod if depto == PRODUCCION else c_adm
-            crudas.append((rubro, partida, codigo, cuenta, monto))
-        if depto == ADMIN:
-            crudas.sort(key=lambda t: _ORDEN_ADMIN.index(t[0]))
-        # agrupa partidas consecutivas con la misma cuenta
-        i = 0
-        while i < len(crudas):
-            j = i
-            while j + 1 < len(crudas) and crudas[j + 1][2] == crudas[i][2]:
-                j += 1
-            grupo = crudas[i:j + 1]
-            total = sum((t[4] for t in grupo), CERO)
-            for k, (rubro, partida, codigo, cuenta, monto) in enumerate(grupo):
-                if len(grupo) == 1:
-                    lineas.append({"rubro": rubro, "partida": partida, "codigo": codigo,
-                                   "cuenta": cuenta, "parcial": None, "debe": monto,
-                                   "haber": None})
-                else:
-                    lineas.append({"rubro": rubro, "partida": partida, "codigo": codigo,
-                                   "cuenta": cuenta, "parcial": monto,
-                                   "debe": total if k == len(grupo) - 1 else None,
-                                   "haber": None})
-            i = j + 1
+            lineas.append({"rubro": rubro, "partida": partida, "codigo": codigo,
+                           "cuenta": cuenta, "parcial": None, "debe": monto, "haber": None})
 
     g = _globales(filas)
     for clave, monto in (("sueldos", g["liquido_pagable"]),

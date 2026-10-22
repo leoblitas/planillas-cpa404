@@ -270,7 +270,6 @@ with tab_asiento:
             vista = pd.DataFrame([{
                 "Rubro": l["rubro"], "Partida presupuestaria": l["partida"],
                 "Código": l["codigo"], "Cuenta contable": l["cuenta"],
-                "Parcial": None if l["parcial"] is None else float(l["parcial"]),
                 "Debe": None if l["debe"] is None else float(l["debe"]),
                 "Haber": None if l["haber"] is None else float(l["haber"])}
                 for l in asiento["lineas"]])

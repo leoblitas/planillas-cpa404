@@ -159,6 +159,20 @@ except Exception as exc:
     st.error(f"Error en los parámetros: {exc}")
     st.stop()
 
+# Verifica que calculos.py, planilla.py, asientos.py y documentos.py sean de la misma versión
+_CLAVES_REQUERIDAS = [
+    "nombre_completo", "departamento", "impuesto_neto", "saldo_favor_fisco",
+    "saldo_favor_dependiente", "saldo_favor_anterior", "mantenimiento_valor",
+    "saldo_utilizado", "exceso_imponible", "aportes_patronales", "total_descuentos"]
+if filas:
+    _faltan = [k for k in _CLAVES_REQUERIDAS if k not in filas[0]]
+    if _faltan:
+        st.error("Los archivos del repositorio son de versiones distintas. Falta el resultado: "
+                 + ", ".join(_faltan) + ". Suba de nuevo TODOS los archivos .py del proyecto "
+                 "(app.py, calculos.py, planilla.py, asientos.py, documentos.py, comprobantes.py) "
+                 "y reinicie la app.")
+        st.stop()
+
 meta = {
     "empresa": empresa.strip() or "—", "nit": nit.strip(),
     "periodo": f"{mes_nombre} {anio}", "fecha_corte": fecha_corte,

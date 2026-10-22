@@ -67,63 +67,196 @@ def _doc(buf, apaisado: bool) -> SimpleDocTemplate:
 
 
 # --------------------------------------------------------------------------- #
+# Número a letras
+# --------------------------------------------------------------------------- #
+_UNIDADES = ["", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve",
+             "diez", "once", "doce", "trece", "catorce", "quince", "dieciséis",
+             "diecisiete", "dieciocho", "diecinueve", "veinte", "veintiuno", "veintidós",
+             "veintitrés", "veinticuatro", "veinticinco", "veintiséis", "veintisiete",
+             "veintiocho", "veintinueve"]
+_DECENAS = ["", "", "", "treinta", "cuarenta", "cincuenta", "sesenta", "setenta", "ochenta",
+            "noventa"]
+_CENTENAS = ["", "ciento", "doscientos", "trescientos", "cuatrocientos", "quinientos",
+             "seiscientos", "setecientos", "ochocientos", "novecientos"]
+
+
+def _menor_mil(n: int) -> str:
+    if n == 100:
+        return "cien"
+    c, resto = divmod(n, 100)
+    partes = [_CENTENAS[c]] if c else []
+    if resto < 30:
+        if resto:
+            partes.append(_UNIDADES[resto])
+    else:
+        d, u = divmod(resto, 10)
+        partes.append(_DECENAS[d] + (f" y {_UNIDADES[u]}" if u else ""))
+    return " ".join(partes)
+
+
+def _apocopar(n: int) -> str:
+    """Letras de n antes de 'mil' o 'millones' (uno -> un, veintiuno -> veintiún)."""
+    t = _menor_mil(n)
+    if t.endswith("veintiuno"):
+        return t[:-9] + "veintiún"
+    return t[:-3] + "un" if t.endswith("uno") else t
+
+
+def numero_a_letras(monto: Decimal | float | int) -> str:
+    """80743.11 -> 'Ochenta mil setecientos cuarenta y tres 11/100 bolivianos'."""
+    total = Decimal(str(monto)).quantize(Decimal("0.01"))
+    entero, centavos = int(total), int((total - int(total)) * 100)
+    if entero == 0:
+        letras = "cero"
+    else:
+        millones, resto = divmod(entero, 1_000_000)
+        miles, unidades = divmod(resto, 1000)
+        partes = []
+        if millones:
+            partes.append("un millón" if millones == 1 else f"{_apocopar(millones)} millones")
+        if miles:
+            partes.append("mil" if miles == 1 else f"{_apocopar(miles)} mil")
+        if unidades:
+            partes.append(_menor_mil(unidades))
+        letras = " ".join(partes)
+    return f"{letras.capitalize()} {centavos:02d}/100 bolivianos"
+
+
+# --------------------------------------------------------------------------- #
 # Empresa privada
 # --------------------------------------------------------------------------- #
-_SANGRIA = {0: 0, 1: 14, 2: 22, 3: 36}
+_SANGRIA = {0: 0, 1: 16, 2: 8, 3: 28}
+AZUL = colors.HexColor("#" + COLOR_HEADER)
+AZUL_CLARO = colors.HexColor("#E8EEF5")
+LINEA = colors.HexColor("#D5DBE3")
 
 
 def pdf_asiento_privado(asiento: dict, meta: dict) -> bytes:
     """Asiento contable de la planilla (empresa privada), carta vertical."""
     buf = io.BytesIO()
     doc = _doc(buf, apaisado=False)
-    ancho = letter[0] - 72
-    st_t = ParagraphStyle("t", fontName="Helvetica-Bold", fontSize=12, leading=15,
-                          textColor=colors.HexColor("#" + COLOR_HEADER))
-    st_n = ParagraphStyle("n", fontName="Helvetica", fontSize=8.5, leading=11)
-    st_b = ParagraphStyle("b", fontName="Helvetica-Bold", fontSize=10, leading=13)
+    W = letter[0] - 72
+    fecha = _fmt_fecha(meta.get("fecha_asiento") or meta["fecha_corte"])
+    est = lambda n, **k: ParagraphStyle(n, fontName=k.pop("f", "Helvetica"), **k)
 
-    historia: list = [Paragraph(meta["empresa"], st_t)]
+    # --- Cabecera: empresa a la izquierda, datos del asiento a la derecha ----
+    izq = [Paragraph(meta["empresa"], est("emp", f="Helvetica-Bold", fontSize=15, leading=18,
+                                          textColor=AZUL))]
     if meta.get("nit"):
-        historia.append(Paragraph(f"NIT: {meta['nit']}", st_n))
-    historia += [
-        Paragraph("ASIENTO CONTABLE - REGISTRO DE LA PLANILLA DE SUELDOS Y SALARIOS", st_b),
-        Paragraph(f"Periodo: {meta['periodo']}  |  Fecha: "
-                  f"{_fmt_fecha(meta.get('fecha_asiento') or meta['fecha_corte'])}"
-                  f"  |  Asiento N°: {meta.get('numero_asiento', '')}", st_n),
-        Spacer(1, 10)]
+        izq.append(Paragraph(f"NIT: {meta['nit']}", est("nit", fontSize=8.5, leading=11,
+                                                       textColor=colors.HexColor("#555555"))))
+    cab_der = Table(
+        [[Paragraph("ASIENTO CONTABLE", est("ac", f="Helvetica-Bold", fontSize=9.5, leading=12,
+                                            textColor=colors.white, alignment=1)), ""],
+         [Paragraph("N°", est("l1", f="Helvetica-Bold", fontSize=8, leading=10)),
+          Paragraph(str(meta.get("numero_asiento") or ""), est("v1", fontSize=9, leading=11))],
+         [Paragraph("Fecha", est("l2", f="Helvetica-Bold", fontSize=8, leading=10)),
+          Paragraph(fecha, est("v2", fontSize=9, leading=11))]],
+        colWidths=[46, 134])
+    cab_der.setStyle(TableStyle([
+        ("SPAN", (0, 0), (1, 0)), ("BACKGROUND", (0, 0), (1, 0), AZUL),
+        ("BOX", (0, 0), (-1, -1), 0.8, AZUL), ("LINEBELOW", (0, 1), (-1, 1), 0.4, LINEA),
+        ("BACKGROUND", (0, 1), (0, -1), AZUL_CLARO),
+        ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    cabecera = Table([[izq, cab_der]], colWidths=[W - 180, 180])
+    cabecera.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
+                                  ("LEFTPADDING", (0, 0), (0, 0), 0),
+                                  ("RIGHTPADDING", (1, 0), (1, 0), 0)]))
 
-    datos: list[list[Any]] = [["CUENTAS", "PARCIAL", "DEBE", "HABER"]]
+    # --- Título -------------------------------------------------------------------
+    titulo = Table(
+        [[Paragraph("REGISTRO DE LA PLANILLA DE SUELDOS Y SALARIOS",
+                    est("tt", f="Helvetica-Bold", fontSize=11, leading=14, alignment=1))],
+         [Paragraph(f"Periodo: {meta['periodo']}  &nbsp;·&nbsp;  Moneda: Bolivianos (Bs)",
+                    est("ts", fontSize=8.5, leading=11, alignment=1,
+                        textColor=colors.HexColor("#555555")))]], colWidths=[W])
+    titulo.setStyle(TableStyle([("LINEABOVE", (0, 0), (-1, 0), 1.2, AZUL),
+                                ("LINEBELOW", (0, -1), (-1, -1), 0.4, LINEA),
+                                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                                ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+
+    # --- Cuerpo del asiento ----------------------------------------------------------
+    enc = est("enc", f="Helvetica-Bold", fontSize=8.5, leading=10, textColor=colors.white,
+              alignment=1)
+    datos: list[list[Any]] = [[Paragraph("CUENTA", enc), Paragraph("PARCIAL", enc),
+                               Paragraph("DEBE", enc), Paragraph("HABER", enc)]]
     estilos: list[tuple] = []
-    for l in asiento["lineas"]:
-        txt = l["cuenta"]
-        if l["subrayar"]:
-            txt = f"<u>{txt}</u>"
-        sty = ParagraphStyle("c", fontName="Helvetica-Bold" if l["nivel"] == 0 else "Helvetica",
-                             fontSize=9, leading=11, leftIndent=_SANGRIA[l["nivel"]])
-        datos.append([Paragraph(txt, sty), _monto(l["parcial"]), _monto(l["debe"]),
+    primer_haber = None
+    for i, l in enumerate(asiento["lineas"], start=1):
+        principal = l["debe"] is not None or l["haber"] is not None
+        nombre = l["cuenta"]
+        if l["haber"] is not None and l["nivel"] == 2:
+            nombre = f'<font color="#777777"><i>a</i></font>&nbsp;&nbsp;{nombre}'
+            if primer_haber is None:
+                primer_haber = i
+        sty = est(f"c{i}", f="Helvetica-Bold" if principal else "Helvetica", fontSize=9,
+                  leading=11, leftIndent=_SANGRIA[l["nivel"]])
+        datos.append([Paragraph(nombre, sty), _monto(l["parcial"]), _monto(l["debe"]),
                       _monto(l["haber"])])
-    datos.append(["TOTAL", "", _monto(asiento["total_debe"]), _monto(asiento["total_haber"])])
+        if l["debe"] is not None and l["nivel"] == 0:
+            estilos.append(("BACKGROUND", (0, i), (-1, i), AZUL_CLARO))
+        if principal:
+            estilos.append(("FONT", (1, i), (-1, i), "Helvetica-Bold", 9))
+    n = len(datos)
+    datos.append([Paragraph("TOTAL", est("tot", f="Helvetica-Bold", fontSize=9.5, leading=12,
+                                          alignment=2)),
+                  "", _monto(asiento["total_debe"]), _monto(asiento["total_haber"])])
+    if primer_haber:
+        estilos.append(("LINEABOVE", (0, primer_haber), (-1, primer_haber), 0.9, AZUL))
 
-    t = Table(datos, colWidths=[ancho - 270, 90, 90, 90])
-    t.setStyle(TableStyle([
-        ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 9),
-        ("ALIGN", (0, 0), (-1, 0), "CENTER"),
-        ("BOX", (0, 0), (-1, -1), 0.8, NEGRO), ("INNERGRID", (0, 0), (-1, 0), 0.8, NEGRO),
-        ("LINEBELOW", (0, 0), (-1, 0), 0.8, NEGRO),
-        ("LINEBEFORE", (1, 0), (-1, -1), 0.5, colors.HexColor("#999999")),
+    cuerpo = Table(datos, colWidths=[W - 285, 95, 95, 95], repeatRows=1)
+    cuerpo.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), AZUL),
         ("FONT", (1, 1), (-1, -1), "Helvetica", 9),
         ("ALIGN", (1, 1), (-1, -1), "RIGHT"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-        ("BACKGROUND", (0, -1), (-1, -1), GRIS),
-        ("FONT", (0, -1), (-1, -1), "Helvetica-Bold", 9),
-        ("LINEABOVE", (0, -1), (-1, -1), 0.8, NEGRO),
+        ("TOPPADDING", (0, 0), (-1, -1), 4.5), ("BOTTOMPADDING", (0, 0), (-1, -1), 4.5),
+        ("RIGHTPADDING", (1, 0), (-1, -1), 8),
+        ("LINEBELOW", (0, 1), (-1, n - 1), 0.4, LINEA),
+        ("LINEBEFORE", (1, 0), (-1, -1), 0.4, LINEA),
+        ("BOX", (0, 0), (-1, -1), 0.9, AZUL),
+        ("BACKGROUND", (0, n), (-1, n), AZUL_CLARO),
+        ("FONT", (2, n), (-1, n), "Helvetica-Bold", 9.5),
+        ("LINEABOVE", (0, n), (-1, n), 1.2, AZUL),
+        ("SPAN", (0, n), (1, n)),
     ] + estilos))
-    historia.append(t)
+
+    est_n = est("n", fontSize=9, leading=12)
+    son = Table([[Paragraph(f"<b>Son:</b> {numero_a_letras(asiento['total_debe'])}", est_n)]],
+                colWidths=[W])
+    son.setStyle(TableStyle([("TOPPADDING", (0, 0), (-1, -1), 6),
+                             ("LEFTPADDING", (0, 0), (-1, -1), 2)]))
+    glosa = Table([[Paragraph("<b>GLOSA</b>", est("gl", f="Helvetica-Bold", fontSize=8,
+                                                   leading=10, textColor=AZUL))],
+                   [Paragraph(_glosa(meta), est_n)]], colWidths=[W])
+    glosa.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.8, AZUL),
+                               ("BACKGROUND", (0, 0), (-1, 0), AZUL_CLARO),
+                               ("TOPPADDING", (0, 0), (-1, -1), 4),
+                               ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
+
+    def firma(rol: str) -> Table:
+        t = Table([[""], [Paragraph(f"<b>{rol}</b>", est("fr", fontSize=8, leading=10,
+                                                         alignment=1))],
+                   [Paragraph("Nombre y firma", est("fs", fontSize=7, leading=9, alignment=1,
+                                                    textColor=colors.HexColor("#777777")))]],
+                  colWidths=[(W - 40) / 3], rowHeights=[38, 11, 10])
+        t.setStyle(TableStyle([("LINEABOVE", (0, 1), (-1, 1), 0.7, colors.black),
+                               ("TOPPADDING", (0, 0), (-1, -1), 1),
+                               ("BOTTOMPADDING", (0, 0), (-1, -1), 0)]))
+        return t
+
+    firmas = Table([[firma("Elaborado por"), "", firma("Revisado por"), "",
+                     firma("Aprobado por")]],
+                   colWidths=[(W - 40) / 3, 20, (W - 40) / 3, 20, (W - 40) / 3])
+    firmas.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0),
+                                ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+
+    historia: list = [cabecera, Spacer(1, 8), titulo, Spacer(1, 12), cuerpo, son,
+                      Spacer(1, 8), glosa]
     if not asiento["cuadra"]:
-        historia.append(Paragraph("<b>ATENCIÓN: el asiento no cuadra.</b>", st_n))
-    historia += [Spacer(1, 8), Paragraph(f"<b>Glosa:</b> {_glosa(meta)}", st_n),
-                 Spacer(1, 40), KeepTogether(_firmas_pdf(ancho))]
+        historia.append(Paragraph("<b>ATENCIÓN: el asiento no cuadra.</b>", est_n))
+    historia += [Spacer(1, 18), KeepTogether(firmas)]
     doc.build(historia, onFirstPage=_pie, onLaterPages=_pie)
     return buf.getvalue()
 
@@ -139,36 +272,96 @@ def _hoja_encabezado(ws, meta: dict, titulo: str) -> None:
 
 
 def excel_asiento_privado(asiento: dict, meta: dict) -> bytes:
-    """Mismo asiento en Excel (montos como números, sangría por nivel)."""
+    """Mismo asiento en Excel, con el diseño del PDF."""
     wb = Workbook()
     ws = wb.active
     ws.title = "Asiento"
-    _hoja_encabezado(ws, meta, "ASIENTO CONTABLE - REGISTRO DE LA PLANILLA DE SUELDOS Y SALARIOS")
-    borde = Side(style="thin", color="888888")
-    for j, h in enumerate(["CUENTAS", "PARCIAL", "DEBE", "HABER"], start=1):
-        c = ws.cell(6, j, h)
+    fecha = _fmt_fecha(meta.get("fecha_asiento") or meta["fecha_corte"])
+    azul, claro = COLOR_HEADER, COLOR_TOTAL
+    fino = Side(style="thin", color="D5DBE3")
+    medio = Side(style="medium", color=azul)
+
+    ws["A1"] = meta["empresa"]
+    ws["A1"].font = Font(bold=True, size=15, color=azul)
+    if meta.get("nit"):
+        ws["A2"] = f"NIT: {meta['nit']}"
+        ws["A2"].font = Font(size=9, color="555555")
+    ws.merge_cells("C1:D1")
+    ws["C1"] = "ASIENTO CONTABLE"
+    ws["C1"].font = Font(bold=True, color="FFFFFF")
+    ws["C1"].fill = PatternFill("solid", fgColor=azul)
+    ws["C1"].alignment = Alignment(horizontal="center")
+    ws["D1"].fill = PatternFill("solid", fgColor=azul)
+    ws["C2"], ws["D2"] = "N°", str(meta.get("numero_asiento") or "")
+    ws["C3"], ws["D3"] = "Fecha", fecha
+    for r in (2, 3):
+        ws.cell(r, 3).font = Font(bold=True)
+        ws.cell(r, 3).fill = PatternFill("solid", fgColor=claro)
+    ws.merge_cells("A5:D5")
+    ws["A5"] = "REGISTRO DE LA PLANILLA DE SUELDOS Y SALARIOS"
+    ws["A5"].font = Font(bold=True, size=12)
+    ws["A5"].alignment = Alignment(horizontal="center")
+    ws["A5"].border = Border(top=medio)
+    ws.merge_cells("A6:D6")
+    ws["A6"] = f"Periodo: {meta['periodo']}  ·  Moneda: Bolivianos (Bs)"
+    ws["A6"].font = Font(size=9, color="555555")
+    ws["A6"].alignment = Alignment(horizontal="center")
+
+    fila_enc = 8
+    for j, h in enumerate(["CUENTA", "PARCIAL", "DEBE", "HABER"], start=1):
+        c = ws.cell(fila_enc, j, h)
         c.font = Font(bold=True, color="FFFFFF")
-        c.fill = PatternFill("solid", fgColor=COLOR_HEADER)
-        c.alignment = Alignment(horizontal="center")
-    r = 7
+        c.fill = PatternFill("solid", fgColor=azul)
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.border = Border(left=fino, right=fino)
+    r = fila_enc + 1
+    primer_haber_visto = False
     for l in asiento["lineas"]:
-        c = ws.cell(r, 1, l["cuenta"])
-        c.alignment = Alignment(indent=_SANGRIA[l["nivel"]] // 6)
-        c.font = Font(bold=l["nivel"] == 0, underline="single" if l["subrayar"] else None)
+        principal = l["debe"] is not None or l["haber"] is not None
+        nombre = ("a   " + l["cuenta"]) if (l["haber"] is not None and l["nivel"] == 2) \
+            else l["cuenta"]
+        c = ws.cell(r, 1, nombre)
+        c.font = Font(bold=principal)
+        c.alignment = Alignment(horizontal="left", indent=_SANGRIA[l["nivel"]] // 5)
         for j, k in ((2, "parcial"), (3, "debe"), (4, "haber")):
+            cc = ws.cell(r, j)
             if l[k] is not None:
-                cc = ws.cell(r, j, float(l[k]))
+                cc.value = float(l[k])
                 cc.number_format = "#,##0.00"
+            cc.font = Font(bold=principal and j > 1)
+            cc.alignment = Alignment(horizontal="right")
+        for j in range(1, 5):
+            cell = ws.cell(r, j)
+            top = medio if (l["haber"] is not None and l["nivel"] == 2
+                            and not primer_haber_visto) else None
+            cell.border = Border(bottom=fino, left=fino if j > 1 else None, right=fino if j > 1 else None,
+                                 top=top)
+            if l["debe"] is not None and l["nivel"] == 0:
+                cell.fill = PatternFill("solid", fgColor=claro)
+        if l["haber"] is not None and l["nivel"] == 2:
+            primer_haber_visto = True
         r += 1
-    ws.cell(r, 1, "TOTAL")
-    ws.cell(r, 3, f"=SUM(C7:C{r - 1})").number_format = "#,##0.00"
-    ws.cell(r, 4, f"=SUM(D7:D{r - 1})").number_format = "#,##0.00"
+    ws.cell(r, 1, "TOTAL").alignment = Alignment(horizontal="right")
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=2)
+    ws.cell(r, 3, f"=SUM(C{fila_enc + 1}:C{r - 1})").number_format = "#,##0.00"
+    ws.cell(r, 4, f"=SUM(D{fila_enc + 1}:D{r - 1})").number_format = "#,##0.00"
     for j in range(1, 5):
-        ws.cell(r, j).font = Font(bold=True)
-        ws.cell(r, j).fill = PatternFill("solid", fgColor=COLOR_TOTAL)
-        ws.cell(r, j).border = Border(top=borde)
-    ws.cell(r + 2, 1, f"Glosa: {_glosa(meta)}")
-    for col, w in zip("ABCD", (52, 16, 16, 16)):
+        c = ws.cell(r, j)
+        c.font = Font(bold=True)
+        c.fill = PatternFill("solid", fgColor=claro)
+        c.border = Border(top=medio, bottom=medio)
+    ws.cell(r + 1, 1, f"Son: {numero_a_letras(asiento['total_debe'])}").font = Font(bold=True)
+    ws.merge_cells(start_row=r + 3, start_column=1, end_row=r + 3, end_column=4)
+    ws.cell(r + 3, 1, f"Glosa: {_glosa(meta)}")
+    ws.cell(r + 3, 1).alignment = Alignment(wrap_text=True, vertical="top")
+    ws.row_dimensions[r + 3].height = 32
+    for k, rol in enumerate(["Elaborado por", "Revisado por", "Aprobado por"]):
+        col = (1, 3, 4)[k]
+        c = ws.cell(r + 7, col, rol)
+        c.alignment = Alignment(horizontal="center")
+        c.border = Border(top=Side(style="thin"))
+        c.font = Font(bold=True, size=9)
+    for col, w in zip("ABCD", (54, 16, 17, 17)):
         ws.column_dimensions[col].width = w
     ws.page_setup.orientation = "portrait"
     ws.page_setup.paperSize = ws.PAPERSIZE_LETTER

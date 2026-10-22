@@ -19,6 +19,7 @@ from typing import Any, BinaryIO, Union
 
 from openpyxl import load_workbook
 
+import asientos
 import calculos as c
 
 MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio",
@@ -102,7 +103,7 @@ def calcular_todos(empleados: list[dict], parametros: dict, tabla_antiguedad: li
     """Calcula la planilla de todos los empleados del periodo.
 
     ``empleados``: dicts con ``ID_Empleado, CI, Apellidos, Nombres,
-    Fecha_Ingreso, Haber_Basico`` y las ``COLUMNAS_VARIABLES``.
+    Departamento, Fecha_Ingreso, Haber_Basico`` y las ``COLUMNAS_VARIABLES``.
     Retorna ``(filas, errores)``.
     """
     fecha_corte = c.ultimo_dia_periodo(anio, mes)
@@ -138,6 +139,8 @@ def calcular_todos(empleados: list[dict], parametros: dict, tabla_antiguedad: li
             "id": e.get("ID_Empleado"),
             "ci": e.get("CI") or "",
             "nombre": f"{e.get('Apellidos') or ''} {e.get('Nombres') or ''}".strip(),
+            "nombre_completo": f"{e.get('Nombres') or ''} {e.get('Apellidos') or ''}".strip(),
+            "departamento": asientos.normalizar_departamento(e.get("Departamento")),
             "fecha_ingreso": _fecha(e.get("Fecha_Ingreso")),
             "horas_extra": _num(e.get("Horas_Extra")),
             "horas_nocturnas": _num(e.get("Horas_Nocturnas")),

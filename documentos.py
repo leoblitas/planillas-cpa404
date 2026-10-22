@@ -113,32 +113,37 @@ def _cols_patronal(ancho_pdf: bool) -> tuple[list[tuple[str, int]], list[Col]]:
 
 
 def _cols_impositiva(pdf: bool, p: dict) -> tuple[list[tuple[str, int]], list[Col]]:
-    tasa = f"{Decimal(str(p['T_RCIVA'])) * 100:.0f}%"
+    """Columnas de la planilla tributaria (mismo orden que el formulario de referencia)."""
     smn_ex = f"{float(p['SMN_EXENTO']):g}"
-    grupos = [("TRABAJADOR", 3), ("BASE IMPONIBLE", 5),
-              ("IMPUESTO Y CRÉDITOS", 6), ("RESULTADO", 2)]
+    smn_cr = f"{float(p['SMN_CREDITO_DEP']):g}"
+    tasa = f"{Decimal(str(p['T_RCIVA'])) * 100:.0f}"
+    grupos = [("PLANILLA TRIBUTARIA", 18)]
     if pdf:
         w = lambda a, b: a
-        nums = 44
+        nums = 39.5
     else:
         w = lambda a, b: b
-        nums = 15
+        nums = 14
     cols = [
-        ("N°", "n", w(16, 5), "n"), ("CI", "ci", w(48, 12), "txt"),
-        ("Apellidos y nombres", "nombre", w(100, 38), "txt"),
-        ("Total ganado", "total_ganado", w(nums, nums), "m"),
-        ("Aportes laborales", "aportes_laborales", w(nums, nums), "m"),
-        ("Base imponible", "base_imponible", w(nums, nums), "m"),
-        (f"Mínimo no imp. ({smn_ex} SMN)", "minimo_no_imponible", w(nums, nums), "m"),
-        ("Exceso sujeto a impuesto", "exceso_imponible", w(nums, nums), "m"),
-        (f"Impuesto determinado ({tasa})", "impuesto_determinado", w(nums, nums), "m"),
-        ("Crédito dependiente", "credito_dependiente", w(nums, nums), "m"),
-        ("Facturas F-110 (monto)", "facturas_f110", w(nums, nums), "m"),
-        ("Crédito F-110", "credito_f110", w(nums, nums), "m"),
-        ("Saldo anterior actualiz.", "saldo_favor_anterior_actualizado", w(nums, nums), "m"),
-        ("RC-IVA neto", "rciva_neto", w(nums, nums), "m"),
-        ("RC-IVA A RETENER", "rciva_retener", w(nums, nums), "m"),
-        ("SALDO A FAVOR siguiente", "saldo_favor_nuevo", w(nums, nums), "m"),
+        ("Nro.", "n", w(16, 5), "n"),
+        ("CI Dependiente", "ci", w(46, 13), "txt"),
+        ("Nombres y Apellidos", "nombre_completo", w(80, 38), "txt"),
+        ("Monto Ingreso Neto", "base_imponible", w(nums, nums), "m"),
+        (f"{smn_ex} SMN Imponibles", "minimo_no_imponible", w(nums, nums), "m"),
+        ("Importe Sujeto a Impuesto (Base Imponible)", "exceso_imponible", w(nums, nums), "m"),
+        ("Impuesto RC-IVA", "impuesto_determinado", w(nums, nums), "m"),
+        (f"{tasa}% de {smn_cr} SMN (*)", "credito_dependiente", w(nums, nums), "m"),
+        ("Impuesto Neto RC-IVA", "impuesto_neto", w(nums, nums), "m"),
+        ("F-110 Casilla 693", "credito_f110", w(nums, nums), "m"),
+        ("Saldo a Favor del Fisco", "saldo_favor_fisco", w(nums, nums), "m"),
+        ("Saldo a Favor del Dependiente", "saldo_favor_dependiente", w(nums, nums), "m"),
+        ("Saldo a Favor del Dependiente Período Anterior", "saldo_favor_anterior", w(nums, nums), "m"),
+        ("Mnto. de Valor Saldo Período Anterior", "mantenimiento_valor", w(nums, nums), "m"),
+        ("Saldo del Período Anterior Actualizado", "saldo_favor_anterior_actualizado", w(nums, nums), "m"),
+        ("Saldo Utilizado", "saldo_utilizado", w(nums, nums), "m"),
+        ("Impuesto RC-IVA Retenido", "rciva_retener", w(nums, nums), "m"),
+        ("Saldo de CF-IVA a Favor del Dependiente para el Mes Siguiente", "saldo_favor_nuevo",
+         w(nums, nums), "m"),
     ]
     return grupos, cols
 
@@ -169,15 +174,17 @@ def _notas_impositiva(meta: dict) -> list[str]:
     factor = max(Decimal(str(meta["ufv_actual"])) / Decimal(str(meta["ufv_anterior"])),
                  Decimal("1"))
     return [
-        f"Salario Mínimo Nacional (SMN): Bs {_fmt_monto(smn)}. "
-        f"Mínimo no imponible: {float(p['SMN_EXENTO']):g} SMN = "
-        f"Bs {_fmt_monto(Decimal(str(p['SMN_EXENTO'])) * smn)}. "
-        f"Tasa RC-IVA: {tasa * 100:.0f}%.",
-        f"Crédito fiscal por dependiente: {tasa * 100:.0f}% de "
-        f"{float(p['SMN_CREDITO_DEP']):g} SMN = Bs {_fmt_monto(cred)}. "
-        f"Crédito F-110: {tasa * 100:.0f}% del monto de facturas presentado.",
-        f"Actualización del saldo a favor anterior por UFV: "
-        f"{meta['ufv_actual']} / {meta['ufv_anterior']} = factor {factor:.6f}.",
+        f"(*) {tasa * 100:.0f}% de {float(p['SMN_CREDITO_DEP']):g} SMN = Bs {_fmt_monto(cred)}; "
+        f"solo compensa el impuesto determinado. SMN: Bs {_fmt_monto(smn)}; "
+        f"mínimo no imponible: {float(p['SMN_EXENTO']):g} SMN = "
+        f"Bs {_fmt_monto(Decimal(str(p['SMN_EXENTO'])) * smn)}.",
+        f"F-110 Casilla 693: {tasa * 100:.0f}% del monto de facturas declarado en el Formulario 110. "
+        f"Actualización del saldo del período anterior por UFV: {meta['ufv_actual']} / "
+        f"{meta['ufv_anterior']} = factor {factor:.6f}.",
+        "Nota: para generar la planilla tributaria se consideran los formularios 110 declarados por "
+        "los dependientes. Las facturas observadas por el agente de retención podrán ser corregidas "
+        "por el dependiente hasta el día veinte (20) del periodo declarado; de no corregirse, serán "
+        "excluidas del cálculo.",
     ]
 
 
@@ -228,7 +235,7 @@ def _hoja_excel(ws, meta: dict, titulo: str, grupos, cols, filas,
         c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         c.border = caja
         ws.column_dimensions[get_column_letter(j)].width = ancho
-    ws.row_dimensions[fila_h].height = 42
+    ws.row_dimensions[fila_h].height = 72 if max(len(x[0]) for x in cols) > 35 else 42
 
     # Datos
     for i, f in enumerate(filas):
@@ -256,7 +263,6 @@ def _hoja_excel(ws, meta: dict, titulo: str, grupos, cols, filas,
     # Totales con fórmulas SUM
     fin = fila_ini + len(filas) - 1
     r_tot = fin + 1
-    primera_txt = next(j for j, (*_, t) in enumerate(cols, start=1) if t == "txt")
     for j, (_, clave, _, tipo) in enumerate(cols, start=1):
         c = ws.cell(r_tot, j)
         c.fill = PatternFill("solid", fgColor=COLOR_TOTAL)
@@ -266,8 +272,9 @@ def _hoja_excel(ws, meta: dict, titulo: str, grupos, cols, filas,
             letra = get_column_letter(j)
             c.value = f"=SUM({letra}{fila_ini}:{letra}{fin})"
             c.number_format = "#,##0.00"
-    ws.cell(r_tot, primera_txt + 1 if cols[primera_txt][3] == "txt" and
-            cols[primera_txt][1] == "ci" else primera_txt, "TOTALES")
+    col_nombre = next(j for j, (_, k, _, _t) in enumerate(cols, start=1)
+                      if k in ("nombre", "nombre_completo"))
+    ws.cell(r_tot, col_nombre, "TOTALES").alignment = Alignment(horizontal="right")
 
     # Notas y firmas
     r = r_tot + 2
@@ -320,7 +327,7 @@ def excel_planilla_impositiva(filas: Sequence[dict], meta: dict) -> bytes:
     ws = wb.active
     ws.title = "Planilla Impositiva"
     g, c = _cols_impositiva(False, meta["parametros"])
-    _hoja_excel(ws, meta, "PLANILLA IMPOSITIVA - RC-IVA (DEPENDIENTES)", g, c, filas,
+    _hoja_excel(ws, meta, "PLANILLA IMPOSITIVA - RC-IVA DEPENDIENTES", g, c, filas,
                 notas=_notas_impositiva(meta))
     return _a_bytes(wb)
 
@@ -328,7 +335,7 @@ def excel_planilla_impositiva(filas: Sequence[dict], meta: dict) -> bytes:
 # --------------------------------------------------------------------------- #
 # PDF (carta apaisada)
 # --------------------------------------------------------------------------- #
-_ESTILO_ENC = ParagraphStyle("enc", fontName="Helvetica-Bold", fontSize=6.3, leading=7.2,
+_ESTILO_ENC = ParagraphStyle("enc", fontName="Helvetica-Bold", fontSize=5.3, leading=6.2,
                              alignment=1, textColor=colors.white)
 _ESTILO_NOMBRE = ParagraphStyle("nom", fontName="Helvetica", fontSize=6.5, leading=7.5)
 _ESTILO_NOTA = ParagraphStyle("nota", fontName="Helvetica-Oblique", fontSize=7, leading=9,
@@ -354,7 +361,7 @@ def _tabla_pdf(grupos, cols, filas) -> Table:
                 fila.append("")
             elif tipo == "m":
                 fila.append(_fmt_monto(f[clave]))
-            elif tipo == "txt" and clave == "nombre":
+            elif tipo == "txt" and clave in ("nombre", "nombre_completo"):
                 fila.append(Paragraph(str(f[clave]), _ESTILO_NOMBRE))
             elif tipo == "date":
                 fila.append(_fmt_fecha(f[clave]))
@@ -362,7 +369,7 @@ def _tabla_pdf(grupos, cols, filas) -> Table:
                 fila.append(str(f[clave]))
         datos.append(fila)
     fila_tot = []
-    pos_label = next(j for j, c in enumerate(cols) if c[3] == "txt" and c[1] == "nombre")
+    pos_label = next(j for j, c in enumerate(cols) if c[3] == "txt" and c[1] in ("nombre", "nombre_completo"))
     for j, (_, clave, _, tipo) in enumerate(cols):
         if tipo == "m":
             fila_tot.append(_fmt_monto(tot[clave]))
@@ -374,7 +381,7 @@ def _tabla_pdf(grupos, cols, filas) -> Table:
 
     t = Table(datos, colWidths=anchos, repeatRows=2)
     estilo = [
-        ("FONT", (0, 2), (-1, -1), "Helvetica", 6.5),
+        ("FONT", (0, 2), (-1, -1), "Helvetica", 6.2),
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#" + COLOR_GROUP)),
         ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#" + COLOR_HEADER)),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -384,7 +391,7 @@ def _tabla_pdf(grupos, cols, filas) -> Table:
         ("LEFTPADDING", (0, 0), (-1, -1), 2), ("RIGHTPADDING", (0, 0), (-1, -1), 2),
         ("ROWBACKGROUNDS", (0, 2), (-1, -2), [colors.white, colors.HexColor("#" + COLOR_ZEBRA)]),
         ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#" + COLOR_TOTAL)),
-        ("FONT", (0, -1), (-1, -1), "Helvetica-Bold", 6.5),
+        ("FONT", (0, -1), (-1, -1), "Helvetica-Bold", 6.2),
         ("LINEABOVE", (0, -1), (-1, -1), 1, colors.black),
     ]
     col = 0
@@ -465,7 +472,7 @@ def pdf_planilla_impositiva(filas: Sequence[dict], meta: dict) -> bytes:
     buf = io.BytesIO()
     doc = _doc_pdf(buf)
     g, c = _cols_impositiva(True, meta["parametros"])
-    historia = _encabezado_pdf(meta, "PLANILLA IMPOSITIVA - RC-IVA (DEPENDIENTES)")
+    historia = _encabezado_pdf(meta, "PLANILLA IMPOSITIVA - RC-IVA DEPENDIENTES")
     historia.append(_tabla_pdf(g, c, filas))
     historia.append(Spacer(1, 8))
     for nota in _notas_impositiva(meta):

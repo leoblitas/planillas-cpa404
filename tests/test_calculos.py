@@ -59,13 +59,13 @@ def test_componentes_variables_emp001():
     assert r["total_ganado"] == D("30823.58")
 
 
-def test_rciva_sin_impuesto_y_saldo_a_favor():
+def test_rciva_sin_impuesto():
     par, _, _ = _datos()
     r = c.calcular_aportes_y_rciva(4500, 3300, 0, par)
     assert r["aportes_laborales"] == D("571.95")          # 12,71%
     assert r["impuesto_determinado"] == D("0.00")
     assert r["rciva_retener"] == D("0.00")
-    assert r["saldo_favor_nuevo"] == D("429.00")           # 13% de 1 SMN
+    assert r["saldo_favor_nuevo"] == D("0.00")             # el crédito de 1 SMN no genera saldo
     assert r["liquido_pagable"] == D("3928.05")
 
 
@@ -78,9 +78,41 @@ def test_rciva_con_impuesto():
     assert r["base_imponible"] == base
     imp = c.redondear((base - D("6600")) * D("0.13"))      # 841,165 -> 841,17
     assert r["impuesto_determinado"] == imp
-    neto = imp - D("429.00") - D("130.00")
-    assert r["rciva_retener"] == neto
-    assert r["liquido_pagable"] == D("15000") - D("1906.50") - ans - neto
+    neto = imp - D("429.00")
+    assert r["impuesto_neto"] == neto
+    assert r["saldo_favor_fisco"] == neto - D("130.00")    # F-110: 13% de 1.000
+    assert r["rciva_retener"] == neto - D("130.00")
+    assert r["liquido_pagable"] == D("15000") - D("1906.50") - ans - r["rciva_retener"]
+
+
+def test_rciva_contra_planilla_tributaria_de_referencia():
+    """Filas de la planilla tributaria de ejemplo (SMN Bs 2.750)."""
+    par = c.cargar_parametros({"SMN": 2750})
+    casos = [
+        # ingreso neto, F-110 (casilla 693), saldo anterior, factor UFV -> esperado
+        (8097.55, 100, 100, "1.01", dict(exceso_imponible="2597.55", impuesto_determinado="337.68",
+         credito_dependiente="357.50", impuesto_neto="0.00", saldo_favor_fisco="0.00",
+         saldo_favor_dependiente="100.00", saldo_favor_anterior_actualizado="101.00",
+         saldo_utilizado="0.00", rciva_retener="0.00", saldo_favor_nuevo="201.00")),
+        (2500, 250, 0, "1", dict(exceso_imponible="0.00", impuesto_determinado="0.00",
+         impuesto_neto="0.00", saldo_favor_dependiente="250.00", rciva_retener="0.00",
+         saldo_favor_nuevo="250.00")),
+        (2500, 0, 0, "1", dict(saldo_favor_nuevo="0.00", rciva_retener="0.00")),
+        (18000, 100, 700, "1.0014285714285714285714285714", dict(
+         exceso_imponible="12500.00", impuesto_determinado="1625.00", impuesto_neto="1267.50",
+         saldo_favor_fisco="1167.50", saldo_favor_anterior_actualizado="701.00",
+         saldo_utilizado="701.00", rciva_retener="466.50", saldo_favor_nuevo="0.00")),
+    ]
+    totales = {"impuesto_determinado": D(0), "rciva_retener": D(0), "saldo_favor_nuevo": D(0)}
+    for ingreso, f110, ant, fac, esperado in casos:
+        r = c.calcular_rciva(ingreso, 2750, D(str(f110)) / D("0.13"), par, ant, 1, D(fac))
+        for k, v in esperado.items():
+            assert r[k] == D(v), (ingreso, k, r[k], v)
+        for k in totales:
+            totales[k] += r[k]
+    assert totales["impuesto_determinado"] == D("1962.68")   # total de la referencia
+    assert totales["rciva_retener"] == D("466.50")
+    assert totales["saldo_favor_nuevo"] == D("451.00")
 
 
 def test_saldo_anterior_con_ufv():
@@ -88,6 +120,8 @@ def test_saldo_anterior_con_ufv():
     r = c.calcular_aportes_y_rciva(4500, 3300, 0, par, saldo_favor_anterior=1000,
                                    ufv_anterior=2, ufv_actual=2.2)
     assert r["saldo_favor_anterior_actualizado"] == D("1100.00")
+    assert r["mantenimiento_valor"] == D("100.00")
+    assert r["saldo_favor_nuevo"] == D("1100.00")          # no se usó: no hay impuesto
     # si la UFV baja, no se reduce el saldo
     r = c.calcular_aportes_y_rciva(4500, 3300, 0, par, saldo_favor_anterior=1000,
                                    ufv_anterior=2, ufv_actual=1.9)
@@ -112,6 +146,65 @@ def test_planilla_completa_y_errores():
         assert f["liquido_pagable"] == f["total_ganado"] - f["aportes_laborales"] - f["rciva_retener"]
     # 22.450 + bono 2.574 + 10 h extra (1.870,83)
     assert filas[0]["total_ganado"] == D("26894.83")
+
+
+def _filas_demo():
+    par, tabla, emp = _datos()
+    emp[0].update(Departamento="Producción", Horas_Extra=10, Facturas_F110=5000)
+    emp[1].update(Departamento="Producción", Dias_Domingo=1)
+    return pl.calcular_todos(emp, par, tabla, 2026, 10, 3.2, 3.25)[0], par
+
+
+def test_asientos_cuadran_y_respetan_departamentos():
+    import asientos as a
+    filas, _ = _filas_demo()
+    for asiento in (a.asiento_privado(filas), a.asiento_publico(filas)):
+        assert asiento["cuadra"] and asiento["total_debe"] > 0
+        assert asiento["total_debe"] == sum(f["total_ganado"] + f["aportes_patronales"]
+                                            + f["aguinaldo"] + f["indemnizacion"] for f in filas)
+    solo_admin = [f for f in filas if f["departamento"] == a.ADMIN]
+    txt = " ".join(l["cuenta"] for l in a.asiento_privado(solo_admin)["lineas"])
+    assert "Producción" not in txt and "Administración" in txt
+    codigos = {l["codigo"] for l in a.asiento_publico(solo_admin)["lineas"]}
+    assert "1155" not in codigos and "611" in codigos
+    solo_prod = [f for f in filas if f["departamento"] == a.PRODUCCION]
+    codigos = {l["codigo"] for l in a.asiento_publico(solo_prod)["lineas"]}
+    assert "1155" in codigos and "611" not in codigos
+
+
+def test_asiento_privado_importes_clave():
+    import asientos as a
+    filas, _ = _filas_demo()
+    g = lambda k: sum(f[k] for f in filas)
+    lineas = {l["cuenta"]: l for l in a.asiento_privado(filas)["lineas"]}
+    assert lineas["Sueldos y Salarios por pagar"]["haber"] == g("liquido_pagable")
+    assert lineas["C.N.S. por pagar"]["haber"] == g("patronal_cns")
+    assert lineas["RC-IVA dependientes por pagar"]["haber"] == g("rciva_retener")
+    assert lineas["Aportes a la Gestora por Pagar"]["haber"] == (
+        g("aportes_laborales") + g("aportes_patronales") - g("patronal_cns"))
+
+
+def test_normalizar_departamento():
+    import asientos as a
+    assert a.normalizar_departamento("Producción") == a.PRODUCCION
+    assert a.normalizar_departamento("PRODUCCION") == a.PRODUCCION
+    assert a.normalizar_departamento("Comercializacion") == a.ADMIN
+    assert a.normalizar_departamento(None) == a.ADMIN
+
+
+def test_comprobantes_se_generan():
+    import asientos as a
+    import comprobantes as k
+    from io import BytesIO
+    from openpyxl import load_workbook
+    filas, par = _filas_demo()
+    meta = dict(empresa="Entidad Ejemplo", nit="", periodo="Octubre 2026",
+                fecha_corte=date(2026, 10, 31), parametros=par, ufv_anterior=1, ufv_actual=1)
+    ap, au = a.asiento_privado(filas), a.asiento_publico(filas)
+    assert k.pdf_asiento_privado(ap, meta)[:5] == b"%PDF-"
+    assert k.pdf_comprobante_publico(au, meta)[:5] == b"%PDF-"
+    for xl in (k.excel_asiento_privado(ap, meta), k.excel_comprobante_publico(au, meta)):
+        assert load_workbook(BytesIO(xl)).worksheets[0]["A1"].value == "Entidad Ejemplo"
 
 
 def test_documentos_se_generan():

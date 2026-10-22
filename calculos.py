@@ -50,6 +50,8 @@ PARAMETROS_DEFECTO: dict[str, Any] = {
     "AP_RP": 0.0171,     # Prima de riesgo profesional
     "AP_PV": 0.02,       # Aporte pro-vivienda
     # Valores base de la hoja Parametros_LEY (por si no se cargan)
+    "T_RCIVA": 0.13,
+    "SMN_EXENTO": 2,
     "H_MES": 240,
     "AGUINALDO": 0.0833,
     "INDEMNIZACION": 0.0833,
@@ -257,6 +259,77 @@ def calcular_ans(total_ganado: Numero, parametros: Mapping[str, Any]) -> Decimal
     return redondear(ans)
 
 
+def calcular_rciva(ingreso_neto: Numero,
+                   smn: Numero,
+                   facturas_f110: Numero,
+                   parametros: Mapping[str, Any],
+                   saldo_favor_anterior: Numero = 0,
+                   ufv_anterior: Numero = 1,
+                   ufv_actual: Numero = 1) -> dict[str, Decimal]:
+    """Planilla tributaria RC-IVA de un dependiente (esquema del formulario).
+
+    ``ingreso_neto`` = total ganado - aportes laborales.
+
+      1. Importe sujeto a impuesto = max(ingreso neto - SMN_EXENTO x SMN, 0)
+      2. Impuesto RC-IVA = T_RCIVA x importe sujeto
+      3. Impuesto neto = max(impuesto - T_RCIVA x SMN_CREDITO_DEP x SMN, 0)
+         (el crédito del dependiente solo compensa impuesto: no genera saldo)
+      4. F-110 casilla 693 = T_RCIVA x monto de facturas
+      5. Saldo a favor del Fisco       = max(impuesto neto - F-110, 0)
+         Saldo a favor del dependiente = max(F-110 - impuesto neto, 0)
+      6. Saldo del periodo anterior actualizado por UFV
+         (sin reducirse si la UFV bajó); mantenimiento de valor = diferencia
+      7. Saldo utilizado = min(saldo anterior actualizado, saldo a favor del Fisco)
+      8. RC-IVA retenido = saldo a favor del Fisco - saldo utilizado
+      9. Saldo a favor del dependiente para el mes siguiente =
+         saldo a favor del dependiente + (saldo anterior actualizado - saldo utilizado)
+    """
+    p = parametros
+    tasa = D(p["T_RCIVA"])
+    smn_d = D(smn)
+    ingreso = D(ingreso_neto)
+
+    minimo = redondear(D(p["SMN_EXENTO"]) * smn_d)
+    exceso = redondear(max(ingreso - minimo, Decimal("0")))
+    impuesto = redondear(exceso * tasa)
+    credito_dep = redondear(tasa * D(p["SMN_CREDITO_DEP"]) * smn_d)
+    impuesto_neto = max(impuesto - credito_dep, Decimal("0"))
+
+    credito_f110 = redondear(tasa * _no_negativo(D(facturas_f110), "facturas_f110"))
+    saldo_fisco = max(impuesto_neto - credito_f110, Decimal("0"))
+    saldo_dep = max(credito_f110 - impuesto_neto, Decimal("0"))
+
+    saldo_ant = redondear(_no_negativo(D(saldo_favor_anterior), "saldo_favor_anterior"))
+    ufv_ini, ufv_fin = D(ufv_anterior), D(ufv_actual)
+    if ufv_ini <= 0 or ufv_fin <= 0:
+        raise ValueError("Los valores de UFV deben ser mayores que cero.")
+    factor_ufv = max(ufv_fin / ufv_ini, Decimal("1"))
+    saldo_actualizado = redondear(saldo_ant * factor_ufv)
+    mantenimiento = saldo_actualizado - saldo_ant
+
+    utilizado = min(saldo_actualizado, saldo_fisco)
+    retenido = saldo_fisco - utilizado
+    saldo_siguiente = saldo_dep + (saldo_actualizado - utilizado)
+
+    return {
+        "base_imponible": redondear(ingreso),          # monto ingreso neto
+        "minimo_no_imponible": minimo,
+        "exceso_imponible": exceso,                    # importe sujeto a impuesto
+        "impuesto_determinado": impuesto,
+        "credito_dependiente": credito_dep,
+        "impuesto_neto": redondear(impuesto_neto),
+        "credito_f110": credito_f110,
+        "saldo_favor_fisco": redondear(saldo_fisco),
+        "saldo_favor_dependiente": redondear(saldo_dep),
+        "saldo_favor_anterior": saldo_ant,
+        "mantenimiento_valor": mantenimiento,
+        "saldo_favor_anterior_actualizado": saldo_actualizado,
+        "saldo_utilizado": redondear(utilizado),
+        "rciva_retener": redondear(retenido),
+        "saldo_favor_nuevo": redondear(saldo_siguiente),
+    }
+
+
 def calcular_aportes_y_rciva(total_ganado: Numero,
                              smn: Numero,
                              facturas_f110: Numero,
@@ -268,28 +341,15 @@ def calcular_aportes_y_rciva(total_ganado: Numero,
     """Aportes laborales (Gestora Pública + ANS), RC-IVA y líquido pagable.
 
     ``parametros_afp`` es el diccionario completo de parámetros (usa AL_CP,
-    AL_RC, AL_CG, AL_AS, T_RCIVA, SMN_EXENTO, SMN_CREDITO_DEP y ANS_*).
+    AL_RC, AL_CG, AL_AS y, para el RC-IVA, ver ``calcular_rciva``).
 
-    Pasos:
-      1. Aportes AFP = TG x (AL_CP + AL_RC + AL_CG + AL_AS)  [+ ANS]
-      2. Base imponible = TG - aportes laborales
-      3. Impuesto determinado = T_RCIVA x max(base - SMN_EXENTO x SMN, 0)
-      4. Crédito dependiente = T_RCIVA x SMN_CREDITO_DEP x SMN
-      5. Crédito F-110 = T_RCIVA x facturas
-      6. Saldo a favor anterior actualizado por UFV = saldo x (UFV_actual / UFV_anterior),
-         sin reducirse si la UFV bajó.
-      7. Neto = impuesto - (créditos + saldo anterior actualizado)
-         * Neto > 0  -> RC-IVA a retener
-         * Neto < 0  -> saldo a favor del dependiente (pasa al mes siguiente)
-      8. Líquido pagable = TG - aportes laborales - RC-IVA a retener
+      * Aportes AFP = TG x (AL_CP + AL_RC + AL_CG + AL_AS)  [+ ANS]
+      * Ingreso neto (base imponible) = TG - aportes laborales
+      * Líquido pagable = TG - aportes laborales - RC-IVA retenido
     """
     p = parametros_afp
     tg = _no_negativo(D(total_ganado), "total_ganado")
-    smn_d = D(smn)
-    tasa = D(p["T_RCIVA"])
 
-    # --- Aportes laborales -------------------------------------------------
-    pct_afp = D(p["AL_CP"]) + D(p["AL_RC"]) + D(p["AL_CG"]) + D(p["AL_AS"])
     aporte_cp = redondear(tg * D(p["AL_CP"]))
     aporte_rc = redondear(tg * D(p["AL_RC"]))
     aporte_cg = redondear(tg * D(p["AL_CG"]))
@@ -298,30 +358,7 @@ def calcular_aportes_y_rciva(total_ganado: Numero,
     ans = calcular_ans(tg, p) if incluir_ans else Decimal("0.00")
     aportes_laborales = aportes_afp + ans
 
-    # --- RC-IVA --------------------------------------------------------------
-    base_imponible = redondear(tg - aportes_laborales)
-    minimo_no_imponible = redondear(D(p["SMN_EXENTO"]) * smn_d)
-    exceso = max(base_imponible - minimo_no_imponible, Decimal("0"))
-    impuesto_determinado = redondear(exceso * tasa)
-
-    credito_dependiente = redondear(tasa * D(p["SMN_CREDITO_DEP"]) * smn_d)
-    credito_f110 = redondear(tasa * _no_negativo(D(facturas_f110), "facturas_f110"))
-
-    saldo_ant = _no_negativo(D(saldo_favor_anterior), "saldo_favor_anterior")
-    ufv_ini, ufv_fin = D(ufv_anterior), D(ufv_actual)
-    if ufv_ini <= 0 or ufv_fin <= 0:
-        raise ValueError("Los valores de UFV deben ser mayores que cero.")
-    factor_ufv = max(ufv_fin / ufv_ini, Decimal("1"))
-    saldo_ant_actualizado = redondear(saldo_ant * factor_ufv)
-
-    total_creditos = credito_dependiente + credito_f110 + saldo_ant_actualizado
-    neto = impuesto_determinado - total_creditos
-    rciva_retener = redondear(max(neto, Decimal("0")))
-    saldo_favor_nuevo = redondear(max(-neto, Decimal("0")))
-
-    liquido = redondear(tg - aportes_laborales - rciva_retener)
-
-    return {
+    resultado = {
         "aporte_cuenta_personal": aporte_cp,
         "aporte_riesgo_comun": aporte_rc,
         "aporte_comision": aporte_cg,
@@ -329,18 +366,12 @@ def calcular_aportes_y_rciva(total_ganado: Numero,
         "aportes_afp": aportes_afp,
         "aporte_nacional_solidario": ans,
         "aportes_laborales": aportes_laborales,
-        "base_imponible": base_imponible,
-        "minimo_no_imponible": minimo_no_imponible,
-        "exceso_imponible": redondear(exceso),
-        "impuesto_determinado": impuesto_determinado,
-        "credito_dependiente": credito_dependiente,
-        "credito_f110": credito_f110,
-        "saldo_favor_anterior_actualizado": saldo_ant_actualizado,
-        "rciva_neto": redondear(neto),
-        "rciva_retener": rciva_retener,
-        "saldo_favor_nuevo": saldo_favor_nuevo,
-        "liquido_pagable": liquido,
     }
+    resultado.update(calcular_rciva(tg - aportes_laborales, smn, facturas_f110, p,
+                                    saldo_favor_anterior, ufv_anterior, ufv_actual))
+    resultado["liquido_pagable"] = redondear(tg - aportes_laborales
+                                             - resultado["rciva_retener"])
+    return resultado
 
 
 # --------------------------------------------------------------------------- #
